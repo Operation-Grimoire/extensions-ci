@@ -1,0 +1,24 @@
+name: Generate merged index.json
+description: >
+  Walk the caller's src/{lang}/{name}/ tree, harvest metadata from the freshly
+  built APKs under repo/, and merge over the previously published index.json
+  so untouched extensions keep their entries.
+
+inputs:
+  repo-url:
+    description: Base URL the published APKs live at (REPO_URL in the script).
+    required: true
+  index-url:
+    description: URL of the previous index.json to merge over.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        REPO_URL: ${{ inputs.repo-url }}
+        INDEX_URL: ${{ inputs.index-url }}
+        REPO_ROOT: ${{ github.workspace }}
+      run: python3 "${{ github.action_path }}/../../../scripts/generate_index.py"
