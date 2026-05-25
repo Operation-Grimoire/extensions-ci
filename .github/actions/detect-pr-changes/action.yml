@@ -1,0 +1,33 @@
+name: Detect PR changes
+description: >
+  Diff a PR against its base and emit the list of Gradle modules that need
+  to be built. A change under lib/ or to top-level gradle config falls back to
+  building every extension.
+
+inputs:
+  base-sha:
+    description: PR base commit SHA.
+    required: true
+  head-sha:
+    description: PR head commit SHA.
+    required: true
+
+outputs:
+  has_changes:
+    description: '"true" if any extension is affected.'
+    value: ${{ steps.scan.outputs.has_changes }}
+  modules:
+    description: Space-separated Gradle module paths, e.g. ":en-novelfull :en-novgo".
+    value: ${{ steps.scan.outputs.modules }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        REPO_ROOT: ${{ github.workspace }}
+      run: python3 "${{ github.action_path }}/../../../scripts/detect_pr_changes.py"

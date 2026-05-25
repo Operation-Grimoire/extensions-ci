@@ -1,0 +1,80 @@
+name: PR Build (dry-run)
+
+# Reusable PR dry-run for any Grimoire-extensions-shaped repo.
+# The caller's pull_request event context is what github.event refers to here,
+# so PR base/head SHAs and the repo checkout all just work without inputs.
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: Java version to set up.
+        required: false
+        type: string
+        default: "17"
+      runs-on:
+        description: GitHub runner label.
+        required: false
+        type: string
+        default: ubuntu-latest
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      modules: ${{ steps.scan.outputs.modules }}
+      has_changes: ${{ steps.scan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: scan
+        uses: operation-grimoire/extensions-ci/.github/actions/detect-pr-changes@v1
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+
+      - name: Summary
+        run: |
+          echo "has_changes=${{ steps.scan.outputs.has_changes }}"
+          echo "modules=${{ steps.scan.outputs.modules }}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant gradlew permission
+        run: chmod +x gradlew
+
+      # Compile-checks the changed extensions without signing or releasing —
+      # a release build still happens on push to main. Unit tests run on each
+      # changed module too, so extensions that ship tests (e.g. parser
+      # fixtures) catch regressions before they merge.
+      - name: Assemble debug APKs and run unit tests
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          targets=""
+          for m in ${{ needs.detect.outputs.modules }}; do
+            targets="$targets $m:assembleDebug $m:testDebugUnitTest"
+          done
+          echo "Building:$targets"
+          ./gradlew $targets --build-cache --stacktrace

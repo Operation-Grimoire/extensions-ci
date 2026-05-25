@@ -1,0 +1,189 @@
+name: Build & Release Extensions
+
+# Reusable build+sign+release pipeline for any Grimoire-extensions-shaped repo.
+# The caller's push event context (github.event.before / github.sha / the repo
+# URL) is what flows through to the detect and release steps below.
+on:
+  workflow_call:
+    inputs:
+      chunk_size:
+        description: Extensions per parallel build job.
+        required: false
+        type: string
+        default: "4"
+      force_all:
+        description: Rebuild every extension regardless of versionCode.
+        required: false
+        type: boolean
+        default: false
+      java-version:
+        description: Java version to set up.
+        required: false
+        type: string
+        default: "17"
+      runs-on:
+        description: GitHub runner label.
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      SIGNING_KEY:
+        description: Base64-encoded JKS keystore for APK signing.
+        required: true
+      KEY_STORE_PASSWORD:
+        required: true
+      KEY_ALIAS:
+        required: true
+      KEY_PASSWORD:
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      matrix: ${{ steps.scan.outputs.matrix }}
+      has_changes: ${{ steps.scan.outputs.has_changes }}
+      changed_count: ${{ steps.scan.outputs.changed_count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: scan
+        uses: operation-grimoire/extensions-ci/.github/actions/detect-changes@v1
+        with:
+          index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/index.json
+          before-sha: ${{ github.event.before }}
+          after-sha: ${{ github.sha }}
+          chunk-size: ${{ inputs.chunk_size }}
+          force-all: ${{ inputs.force_all }}
+
+      - name: Summary
+        run: |
+          echo "changed_count=${{ steps.scan.outputs.changed_count }}"
+          echo "has_changes=${{ steps.scan.outputs.has_changes }}"
+          echo "matrix=${{ steps.scan.outputs.matrix }}"
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant gradlew permission
+        run: chmod +x gradlew
+
+      - name: Build release APKs (chunk ${{ matrix.chunk }})
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          targets=""
+          for m in ${{ matrix.modules }}; do
+            targets="$targets $m:assembleRelease"
+          done
+          echo "Building:$targets"
+          ./gradlew $targets --build-cache
+
+      - name: Sign APKs
+        env:
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
+
+          for apk in $(find src -path "*/build/outputs/apk/release/*-unsigned.apk"); do
+            out="${apk/-unsigned/}"
+            "$APKSIGNER" sign \
+              --ks keystore.jks \
+              --ks-key-alias "$KEY_ALIAS" \
+              --ks-pass pass:"$KEY_STORE_PASSWORD" \
+              --key-pass pass:"$KEY_PASSWORD" \
+              --out "$out" \
+              "$apk"
+            echo "Signed: $out"
+          done
+          rm -f keystore.jks
+
+      - name: Collect APKs
+        run: |
+          mkdir -p repo
+          for m in ${{ matrix.modules }}; do
+            # ":en-novelfull" -> "en/novelfull"
+            mod="${m#:}"
+            lang="${mod%%-*}"
+            name="${mod#${lang}-}"
+            apk=$(find "src/$lang/$name/build/outputs/apk/release" -name "*-release.apk" ! -name "*-unsigned*" 2>/dev/null | head -1)
+            if [ -z "$apk" ]; then
+              echo "::error::No signed APK for $mod"
+              exit 1
+            fi
+            cp "$apk" "repo/${lang}-${name}.apk"
+            echo "Collected: repo/${lang}-${name}.apk"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks-chunk-${{ matrix.chunk }}
+          path: repo/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [detect, build]
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: repo
+          pattern: apks-chunk-*
+          merge-multiple: true
+
+      - name: List collected APKs
+        run: ls -lh repo/
+
+      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v1
+        with:
+          repo-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest
+          index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/index.json
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Extension Repository
+          body: |
+            Auto-generated on every push to main.
+            Updated ${{ needs.detect.outputs.changed_count }} extension(s) in this run.
+          files: |
+            repo/*.apk
+            repo/*.png
+            index.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

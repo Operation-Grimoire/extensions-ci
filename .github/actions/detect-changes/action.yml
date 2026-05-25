@@ -1,0 +1,52 @@
+name: Detect version-bumped extensions
+description: >
+  Compare every extension's versionCode against the published index.json and
+  emit a chunked build matrix. A change under lib/ between the push range
+  forces every extension to rebuild.
+
+inputs:
+  index-url:
+    description: URL of the published index.json to diff against.
+    required: true
+  before-sha:
+    description: Push event "before" SHA (used to scope the lib/ change check).
+    required: false
+    default: ""
+  after-sha:
+    description: Push event "after" SHA. Defaults to HEAD.
+    required: false
+    default: ""
+  chunk-size:
+    description: Max extensions per parallel build job.
+    required: false
+    default: "4"
+  force-all:
+    description: '"true" to rebuild every extension regardless of versionCode.'
+    required: false
+    default: "false"
+
+outputs:
+  has_changes:
+    description: '"true" if any extension needs to be rebuilt.'
+    value: ${{ steps.scan.outputs.has_changes }}
+  changed_count:
+    description: Number of extensions in the matrix.
+    value: ${{ steps.scan.outputs.changed_count }}
+  matrix:
+    description: JSON matrix consumable by `strategy.matrix`.
+    value: ${{ steps.scan.outputs.matrix }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        INDEX_URL: ${{ inputs.index-url }}
+        BEFORE_SHA: ${{ inputs.before-sha }}
+        AFTER_SHA: ${{ inputs.after-sha }}
+        CHUNK_SIZE: ${{ inputs.chunk-size }}
+        FORCE_ALL: ${{ inputs.force-all }}
+        REPO_ROOT: ${{ github.workspace }}
+      run: python3 "${{ github.action_path }}/../../../scripts/detect_changes.py"
