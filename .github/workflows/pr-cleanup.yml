@@ -1,0 +1,30 @@
+name: PR preview cleanup
+
+# Reusable workflow that deletes the pr-<N> preview release and tag when the
+# PR closes (merged or not). Pair it with pr-build.yml so closed PRs don't
+# leave stale preview releases lying around.
+on:
+  workflow_call:
+
+concurrency:
+  group: pr-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete pr-${{ github.event.pull_request.number }} release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: pr-${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag --repo "$REPO"
+            echo "Deleted $TAG release and tag"
+          else
+            echo "No $TAG release to delete"
+          fi

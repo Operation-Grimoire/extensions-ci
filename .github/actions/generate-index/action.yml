@@ -9,8 +9,13 @@ inputs:
     description: Base URL the published APKs live at (REPO_URL in the script).
     required: true
   index-url:
-    description: URL of the previous index.json to merge over.
-    required: true
+    description: >
+      URL of the previous index.json to merge over (so extensions that
+      weren't rebuilt this run keep their entries). Leave blank to start
+      from scratch — used by the PR preview pipeline, where the index
+      should only list the PR-touched extensions.
+    required: false
+    default: ""
 
 runs:
   using: composite

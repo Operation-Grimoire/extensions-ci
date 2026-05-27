@@ -1,0 +1,43 @@
+name: Post or update PR preview comment
+description: >
+  Posts (or updates, on subsequent runs of the same PR) a sticky comment
+  pointing at the just-published pr-<N> preview release with a
+  grimoireapp.org magic link that opens the Add Repository dialog
+  pre-filled.
+
+inputs:
+  repo:
+    description: '"owner/name" of the consumer repo (github.repository).'
+    required: true
+  pr-number:
+    description: PR number this comment belongs to.
+    required: true
+  modules:
+    description: Space-separated Gradle module paths the preview built.
+    required: true
+  index-url:
+    description: Public URL of the just-published pr-<N>/index.json.
+    required: true
+  server-url:
+    description: github.com server URL (github.server_url).
+    required: true
+  head-sha:
+    description: PR head commit SHA (shown in the comment).
+    required: true
+  github-token:
+    description: "Token with `pull-requests: write` on the consumer repo."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ inputs.repo }}
+        PR: ${{ inputs.pr-number }}
+        MODULES: ${{ inputs.modules }}
+        INDEX_URL: ${{ inputs.index-url }}
+        SERVER_URL: ${{ inputs.server-url }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: python3 "${{ github.action_path }}/../../../scripts/comment_pr_preview.py"

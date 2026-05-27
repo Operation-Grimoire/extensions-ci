@@ -1,8 +1,14 @@
-name: PR Build (dry-run)
+name: PR Build (preview)
 
-# Reusable PR dry-run for any Grimoire-extensions-shaped repo.
+# Reusable PR preview pipeline for any Grimoire-extensions-shaped repo.
+# Detects the modules the PR touches, builds them with release config + signing
+# (same recipe as release.yml), publishes them to a per-PR prerelease tagged
+# `pr-<N>`, and posts a sticky PR comment with a grimoireapp.org magic link
+# that opens the Add Repository dialog pre-filled with the preview index.json.
+#
 # The caller's pull_request event context is what github.event refers to here,
-# so PR base/head SHAs and the repo checkout all just work without inputs.
+# so PR base/head SHAs, the repo URL, and the PR number all just work without
+# inputs.
 on:
   workflow_call:
     inputs:
@@ -16,6 +22,16 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+    secrets:
+      SIGNING_KEY:
+        description: Base64-encoded JKS keystore for APK signing.
+        required: true
+      KEY_STORE_PASSWORD:
+        required: true
+      KEY_ALIAS:
+        required: true
+      KEY_PASSWORD:
+        required: true
 
 concurrency:
   group: pr-build-${{ github.event.pull_request.number }}
@@ -63,18 +79,135 @@ jobs:
       - name: Grant gradlew permission
         run: chmod +x gradlew
 
-      # Compile-checks the changed extensions without signing or releasing —
-      # a release build still happens on push to main. Unit tests run on each
-      # changed module too, so extensions that ship tests (e.g. parser
-      # fixtures) catch regressions before they merge.
-      - name: Assemble debug APKs and run unit tests
+      # Release build (so the preview APKs install as the real thing) plus
+      # unit tests — extensions that ship parser fixtures catch regressions
+      # before they merge.
+      - name: Build release APKs and run unit tests
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           targets=""
           for m in ${{ needs.detect.outputs.modules }}; do
-            targets="$targets $m:assembleDebug $m:testDebugUnitTest"
+            targets="$targets $m:assembleRelease $m:testDebugUnitTest"
           done
           echo "Building:$targets"
           ./gradlew $targets --build-cache --stacktrace
+
+      - name: Sign APKs
+        env:
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
+          BUILD_TOOLS=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
+
+          for apk in $(find src -path "*/build/outputs/apk/release/*-unsigned.apk"); do
+            out="${apk/-unsigned/}"
+            "$APKSIGNER" sign \
+              --ks keystore.jks \
+              --ks-key-alias "$KEY_ALIAS" \
+              --ks-pass pass:"$KEY_STORE_PASSWORD" \
+              --key-pass pass:"$KEY_PASSWORD" \
+              --out "$out" \
+              "$apk"
+            echo "Signed: $out"
+          done
+          rm -f keystore.jks
+
+      - name: Collect APKs
+        run: |
+          mkdir -p repo
+          for m in ${{ needs.detect.outputs.modules }}; do
+            # ":en-novelfull" -> "en/novelfull"
+            mod="${m#:}"
+            lang="${mod%%-*}"
+            name="${mod#${lang}-}"
+            apk=$(find "src/$lang/$name/build/outputs/apk/release" -name "*-release.apk" ! -name "*-unsigned*" 2>/dev/null | head -1)
+            if [ -z "$apk" ]; then
+              echo "::error::No signed APK for $mod"
+              exit 1
+            fi
+            cp "$apk" "repo/${lang}-${name}.apk"
+            echo "Collected: repo/${lang}-${name}.apk"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-${{ github.event.pull_request.number }}-apks
+          path: repo/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  preview:
+    needs: [detect, build]
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: repo
+          name: pr-${{ github.event.pull_request.number }}-apks
+
+      - name: List collected APKs
+        run: ls -lh repo/
+
+      # Start from an empty index so the preview repo only lists the
+      # PR-touched extensions — reviewers already have the production repo
+      # added, and overlapping every entry would just spawn phantom
+      # "update available" prompts on extensions installed from production.
+      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v1
+        with:
+          repo-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/pr-${{ github.event.pull_request.number }}
+
+      # Wipe the previous pr-<N> release+tag so re-pushes don't accumulate
+      # stale assets (softprops/action-gh-release's "update existing"
+      # behaviour 422s on same-name files for some asset types).
+      - name: Delete previous preview release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: pr-${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag --repo "$REPO"
+            echo "Deleted previous $TAG release"
+          else
+            echo "No previous $TAG release to delete"
+          fi
+
+      - name: Publish preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pr-${{ github.event.pull_request.number }}
+          name: PR #${{ github.event.pull_request.number }} preview
+          prerelease: true
+          make_latest: "false"
+          target_commitish: ${{ github.event.pull_request.head.sha }}
+          body: |
+            Auto-generated preview repo for #${{ github.event.pull_request.number }}.
+            This release is rebuilt on every push to the PR and cleaned up
+            when the PR closes.
+          files: |
+            repo/*.apk
+            repo/*.png
+            index.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: operation-grimoire/extensions-ci/.github/actions/comment-pr-preview@v1
+        with:
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.pull_request.number }}
+          modules: ${{ needs.detect.outputs.modules }}
+          index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/pr-${{ github.event.pull_request.number }}/index.json
+          server-url: ${{ github.server_url }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

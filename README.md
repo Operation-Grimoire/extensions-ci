@@ -13,16 +13,19 @@ varies is inferred from the caller's `github.*` context or passed via inputs.
 
 ```
 .github/workflows/
-  pr-build.yml         on: workflow_call  — dry-run build + tests for a PR
+  pr-build.yml         on: workflow_call  — build + sign + publish PR preview release
+  pr-cleanup.yml       on: workflow_call  — delete pr-<N> release when the PR closes
   release.yml          on: workflow_call  — build, sign, release on push to main
 .github/actions/
   detect-pr-changes/   composite — diff a PR, emit affected modules
   detect-changes/      composite — diff vs published index.json, emit matrix
   generate-index/      composite — produce merged index.json from built APKs
+  comment-pr-preview/  composite — post/update the sticky magic-link PR comment
 scripts/
   detect_pr_changes.py
   detect_changes.py
   generate_index.py
+  comment_pr_preview.py
 ```
 
 The Python scripts honor `REPO_ROOT` (set by the composite actions to
@@ -36,7 +39,7 @@ checkout of an extensions repo still work the way they always have.
 
 ```yaml
 # .github/workflows/pr-build.yml (in your extensions repo)
-name: PR Build (dry-run)
+name: PR Build (preview)
 on:
   pull_request:
     branches: [main]
@@ -45,12 +48,52 @@ jobs:
     uses: operation-grimoire/extensions-ci/.github/workflows/pr-build.yml@v1
     secrets: inherit
     permissions:
-      contents: read
-      packages: read
+      contents: write        # publish the pr-<N> prerelease
+      packages: read         # pull `lib/` from GitHub Packages
+      pull-requests: write   # post the sticky magic-link comment
 ```
+
+Each PR push runs the same build/sign recipe as `release.yml` on the modules
+the PR touches, then:
+
+1. Publishes the signed APKs + a merged `index.json` to a `pr-<N>` prerelease
+   (rebuilt on every push, so the assets always reflect the PR head).
+2. Posts (or updates) a sticky comment on the PR with a
+   `https://grimoireapp.org/add-repo?...` magic link — tap it on Android and
+   Grimoire opens with the Add Repository dialog pre-filled with the
+   preview's `index.json` URL.
+
+The preview's `index.json` only lists the PR-touched extensions — reviewers
+already have the production repo added, and merging in every production
+entry would just spawn phantom "update available" prompts on extensions
+installed from production.
 
 Inputs (all optional): `java-version` (default `"17"`), `runs-on` (default
 `ubuntu-latest`).
+
+Required secrets (passed via `secrets: inherit`): `SIGNING_KEY`,
+`KEY_STORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. PRs from forks don't
+receive these secrets and so don't get a preview — only same-repo PRs do.
+
+### Calling the PR cleanup workflow
+
+Pair `pr-build.yml` with `pr-cleanup.yml` so closed PRs don't leave stale
+preview releases lying around:
+
+```yaml
+# .github/workflows/pr-cleanup.yml (in your extensions repo)
+name: PR preview cleanup
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+jobs:
+  pr-cleanup:
+    uses: operation-grimoire/extensions-ci/.github/workflows/pr-cleanup.yml@v1
+    secrets: inherit
+    permissions:
+      contents: write
+```
 
 ### Calling the release workflow
 
