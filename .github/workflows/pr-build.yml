@@ -49,7 +49,7 @@ jobs:
           fetch-depth: 0
 
       - id: scan
-        uses: operation-grimoire/extensions-ci/.github/actions/detect-pr-changes@v1
+        uses: operation-grimoire/extensions-ci/.github/actions/detect-pr-changes@v2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
@@ -163,7 +163,7 @@ jobs:
       # PR-touched extensions — reviewers already have the production repo
       # added, and overlapping every entry would just spawn phantom
       # "update available" prompts on extensions installed from production.
-      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v1
+      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v2
         with:
           repo-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/pr-${{ github.event.pull_request.number }}
 
@@ -202,7 +202,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: operation-grimoire/extensions-ci/.github/actions/comment-pr-preview@v1
+      - uses: operation-grimoire/extensions-ci/.github/actions/comment-pr-preview@v2
         with:
           repo: ${{ github.repository }}
           pr-number: ${{ github.event.pull_request.number }}
