@@ -63,10 +63,10 @@ the PR touches, then:
    Grimoire opens with the Add Repository dialog pre-filled with the
    preview's `index.json` URL.
 
-The `index.json` is merged over the production `latest` index, so the
-preview repo lists every extension. Only the PR-touched ones point at the
-`pr-<N>` tag; the rest keep their existing `latest` URLs and the user can
-install the whole ecosystem from a single magic link.
+The preview's `index.json` only lists the PR-touched extensions — reviewers
+already have the production repo added, and merging in every production
+entry would just spawn phantom "update available" prompts on extensions
+installed from production.
 
 Inputs (all optional): `java-version` (default `"17"`), `runs-on` (default
 `ubuntu-latest`).

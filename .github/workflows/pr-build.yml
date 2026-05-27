@@ -159,14 +159,13 @@ jobs:
       - name: List collected APKs
         run: ls -lh repo/
 
-      # Merge over the production `latest` index so the preview repo lists
-      # every extension — only the PR-touched ones point at the pr-<N> tag,
-      # the rest keep their existing `latest` URLs and the user can install
-      # the whole ecosystem from one magic link.
+      # Start from an empty index so the preview repo only lists the
+      # PR-touched extensions — reviewers already have the production repo
+      # added, and overlapping every entry would just spawn phantom
+      # "update available" prompts on extensions installed from production.
       - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v1
         with:
           repo-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/pr-${{ github.event.pull_request.number }}
-          index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/index.json
 
       # Wipe the previous pr-<N> release+tag so re-pushes don't accumulate
       # stale assets (softprops/action-gh-release's "update existing"
