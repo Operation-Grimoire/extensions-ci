@@ -2,7 +2,8 @@
 """
 Generates index.json consumed by the Grimoire app's extension browser.
 - pkg / versionCode / versionName: from build.gradle.kts (APK metadata)
-- name / lang / baseUrl: from @SourceInfo annotation in Kotlin source
+- name / lang / baseUrl / novelUpdatesGroups: from @SourceInfo annotation in
+  Kotlin source
 - iconUrl: highest-density mipmap launcher icon copied alongside the APK
 - sha256: SHA-256 hex digest of the published APK, so the app can verify the
   download wasn't corrupted (captive portals, lossy proxies, ...) before
@@ -77,10 +78,18 @@ def parse_source_info(ext_dir: Path) -> dict:
             sm = re.search(rf'{key}\s*=\s*"([^"]*)"', ann)
             return sm.group(1) if sm else None
 
+        def get_str_array(key):
+            # Kotlin annotation arrays: `key = ["a", "b"]` or, rarely,
+            # `key = arrayOf("a", "b")`. Returns the quoted strings inside.
+            am = (re.search(rf'{key}\s*=\s*\[(.*?)\]', ann, re.DOTALL)
+                  or re.search(rf'{key}\s*=\s*arrayOf\s*\((.*?)\)', ann, re.DOTALL))
+            return re.findall(r'"([^"]*)"', am.group(1)) if am else []
+
         return {
             "name": get_str("name"),
             "lang": get_str("lang"),
             "baseUrl": get_str("baseUrl"),
+            "novelUpdatesGroups": get_str_array("novelUpdatesGroups"),
         }
     raise ValueError(f"No @SourceInfo annotation found under {ext_dir}")
 
@@ -134,6 +143,12 @@ for lang_dir in sorted((ROOT / "src").iterdir()):
             "url": f"{REPO_URL}/{apk_name}",
             "sha256": sha256_of(apk_path),
         }
+
+        # Only emit when the source declares groups, to keep the index tidy;
+        # the app defaults a missing field to an empty list.
+        nu_groups = source.get("novelUpdatesGroups") or []
+        if nu_groups:
+            entry["novelUpdatesGroups"] = nu_groups
 
         icon_src = find_icon(ext_dir)
         if icon_src is not None:
