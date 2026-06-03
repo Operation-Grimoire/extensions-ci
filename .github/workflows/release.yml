@@ -54,7 +54,7 @@ jobs:
           fetch-depth: 0
 
       - id: scan
-        uses: operation-grimoire/extensions-ci/.github/actions/detect-changes@v1
+        uses: operation-grimoire/extensions-ci/.github/actions/detect-changes@v2
         with:
           index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/index.json
           before-sha: ${{ github.event.before }}
@@ -168,7 +168,7 @@ jobs:
       - name: List collected APKs
         run: ls -lh repo/
 
-      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v1
+      - uses: operation-grimoire/extensions-ci/.github/actions/generate-index@v2
         with:
           repo-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest
           index-url: ${{ github.server_url }}/${{ github.repository }}/releases/download/latest/index.json
